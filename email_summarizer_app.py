@@ -3,6 +3,7 @@ import imaplib
 import email
 from email.header import decode_header
 import openai
+import time
 
 # ---------------------- CONFIGURATION ----------------------
 IMAP_SERVER = "imap.gmail.com"
@@ -19,9 +20,8 @@ def fetch_emails(query: str, max_results: int = 5):
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL, PASSWORD)
     except imaplib.IMAP4.error as e:
-        st.error(f"❌ IMAP login failed: {e}\nCheck that your app password is exactly 16 characters (no spaces or quotes) and IMAP is enabled in Gmail settings.")
+        st.error(f"❌ IMAP login failed: {e}\nCheck your app password is 16 characters (no spaces/quotes) and IMAP is enabled in Gmail settings.")
         return []
-
     try:
         mail.select('inbox')
         status, data = mail.search(None, f'(SUBJECT "{query}")')
@@ -52,18 +52,29 @@ def summarize_email(subject: str, body: str) -> str:
         return ""
     openai.api_key = OPENAI_API_KEY
     prompt = f"Summarize this email for a busy parent in 2-3 bullet points:\n\nSubject: {subject}\nBody: {body}"    
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.5
-    )
-    return response.choices[0].message.content.strip()
+    for attempt in range(2):
+        try:
+            response = openai.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5
+            )
+            return response.choices[0].message.content.strip()
+        except openai.error.RateLimitError:
+            if attempt == 0:
+                time.sleep(5)
+                continue
+            st.error("⚠️ OpenAI rate limit exceeded — please try again in a minute.")
+            return ""
+        except Exception as e:
+            st.error(f"⚠️ OpenAI API error: {e}")
+            return ""
+    return ""
 
 # ---------------------- STREAMLIT UI ----------------------
 st.title("📧 Parent Email Summarizer (Cloud‑Only)")
 query = st.text_input("Search keyword (e.g. school, teacher):", value="school")
 num = st.slider("Number of emails to summarize:", min_value=1, max_value=10, value=5)
-
 if st.button("Fetch & Summarize"):
     with st.spinner("Fetching emails..."):
         emails = fetch_emails(query, num)
@@ -89,6 +100,6 @@ st.sidebar.markdown(
    ```
 3️⃣ Ensure your app password is exactly 16 characters (no spaces or quotes).
 4️⃣ Push this script to GitHub and redeploy on Streamlit Cloud.
-5️⃣ Click Fetch & Summarize — any IMAP login errors will now display clearly.
+5️⃣ Click Fetch & Summarize — any IMAP login or API errors will now display clearly.
 """
 )
